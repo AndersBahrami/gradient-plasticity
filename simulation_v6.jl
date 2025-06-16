@@ -1,4 +1,5 @@
 include("variables.jl")
+include("ics_bcs_v6.jl")
 using DifferentialEquations
 using WriteVTK
 using Plots
@@ -15,10 +16,15 @@ using .Variables: eps_e11, eps_e12, eps_e22, eps_e33, eps11, eps12, eps22, eps33
 #----------------------------------------------------------------------------------#
 
 
-function compute_flux_riemann(U, Fx, Fy, Fx_shift, Fy_shift, v1, v2, sigma11, sigma12, sigma22, sigma33, eta, tr_eps, Mu, lambda, RHO, lc, beta, NUM_X_CELLS, NUM_Y_CELLS, p0)
+function compute_flux_riemann(U, Fx, Fy, Fx_shift, Fy_shift, v1, v2, sigma11, sigma12, sigma22, sigma33, eta, tr_eps, Mu, lambda, RHO, lc, beta, NUM_X_CELLS, NUM_Y_CELLS, p0, oneD)
     ### Flux term variables
     tr_eps[:,:] = U[:,:,eps_e11] + U[:,:,eps_e22] + U[:,:,eps_e33]
-    sigma11[:,:] = @. 2*Mu*U[:,:,eps_e11] + lambda*tr_eps[:,:] 
+
+    if oneD          # -- SWITCHED TO 1D --
+        sigma11[:,:] = @. 2*Mu*U[:,:,eps_e11] + lambda*U[:,:,eps_e11]
+    else
+        sigma11[:,:] = @. 2*Mu*U[:,:,eps_e11] + lambda*tr_eps[:,:]
+    end
     sigma12[:,:] = @. 2*Mu*U[:,:,eps_e12]
     sigma22[:,:] = @. 2*Mu*U[:,:,eps_e22] + lambda*tr_eps[:,:]
     sigma33[:,:] = @. 2*Mu*U[:,:,eps_e33] + lambda*tr_eps[:,:]
@@ -61,7 +67,11 @@ function compute_flux_riemann(U, Fx, Fy, Fx_shift, Fy_shift, v1, v2, sigma11, si
     for i in 1:NUM_X_CELLS+1
         for j in 1:NUM_Y_CELLS+1
             Fx_shift[i,j,:] = @. 0.5 * ((Fx[i+1,j,:]+Fx[i,j,:]) -  eta[i,j] * (U[i+1,j,:] - U[i,j,:])) # NTS: eta mult is ambiguous but if compiler is good it should be fine.
-            Fy_shift[i,j,:] = @. 0.5 * ((Fy[i,j+1,:]+Fy[i,j,:]) -  eta[i,j] * (U[i,j+1,:] - U[i,j,:]))
+            if oneD          # -- SWITCHED TO 1D --
+                Fy_shift[i,j,:] .= 0
+            else
+                Fy_shift[i,j,:] .= @. 0.5 * ((Fy[i,j+1,:]+Fy[i,j,:]) -  eta[i,j] * (U[i,j+1,:] - U[i,j,:]))
+            end
         end
     end
 end
@@ -75,72 +85,15 @@ function evolve_U_godunov(U, Fx_shift, Fy_shift, eta, cL, cR, RHO, NUM_X_CELLS, 
             U[i,j,:]= @. U[i,j,:] - DELTA_T*(1/DELTA_X * (Fx_shift[i,j,:] - Fx_shift[i-1,j,:]) + 1/DELTA_Y * (Fy_shift[i,j,:] - Fy_shift[i,j-1,:]))
         end
     end
-    ### BOUNDARY CONDITIONS
-    # Pass through
-    U[1,:,:]=U[2,:,:]
-    U[:,1,:]=U[:,2,:]
-    U[NUM_X_CELLS+2,:,:] = U[NUM_X_CELLS+1,:,:]
-    U[:,NUM_Y_CELLS+2,:] = U[:,NUM_Y_CELLS+1,:]
-
-    ## Double pull
-    # U[2,:,eps11].=-0.001 SHOULD BE 1, NOT 2,?
-    # U[2,:,eps_e11].=-0.001
-    # U[NUM_X_CELLS+1,:,eps11].= 0.001
-    # U[NUM_X_CELLS+1,:,eps_e11].= 0.001
-
-    ## Diagonal strip
-    # for i in 1:NUM_X_CELLS+2
-    #     for j in 1:NUM_Y_CELLS+2
-    #         if 105-5*i > j && 75-5*i < j
-    #             U[i,j,eps11] = -0.001
-    #             U[i,j,eps_e11] = -0.001
-    #         end
-    #     end
-    # end
-
-    ## Reflective
-    # U[1,:,u1]= -U[2,:,u1]
-    # U[:,1,u2]= -U[:,2,u2]
-    # U[NUM_X_CELLS+2,:,u1] = -U[NUM_X_CELLS+1,:,u1]
-    # U[:,NUM_Y_CELLS+2,u2] = -U[:,NUM_Y_CELLS+1,u2]
-
-    ## Other Reflective
-    # U[1,:,eps11].= 0.001#-U[2,:,eps11]
-    # U[1,:,eps_e11].= 0.001#-U[2,:,eps_e11]
-    # U[:,1,eps22]= -U[:,2,eps22]
-    # U[:,1,eps_e22]= -U[:,2,eps_e22]
-    # U[NUM_X_CELLS+2,:,eps11] = -U[NUM_X_CELLS+1,:,eps11]
-    # U[NUM_X_CELLS+2,:,eps_e11] = -U[NUM_X_CELLS+1,:,eps_e11]
-    # U[:,NUM_Y_CELLS+2,eps22] = -U[:,NUM_Y_CELLS+1,eps22]
-    # U[:,NUM_Y_CELLS+2,eps_e22] = -U[:,NUM_Y_CELLS+1,eps_e22]
-
-    ## Left wall, right pull, weird boundary
-    #=
-        # NOTE: Change sigma12, sigma22 to 0 in the source term and maybe elsewhere?
-        Use long bar, pay attention to the number of pieces broken into. 
-        Try for all mesh size cases n=1,2,3,4,5 and compare least squares with n=8 (i.e. 100*2^8 cells).
-        Try all of these for both 1D and 2D cases and also for both stress strain curves.
-        Check notes for more specifications on the 2D case.
-    =#
-    # U[1,:,u1].=0
-    # U[1,:,u2].=0
-    # U[NUM_X_CELLS+2,:,eps11].= 0.001
-    # U[NUM_X_CELLS+2,:,eps_e11].= 0.001
-    # U[:,1,1:8].=0
-    # U[:,NUM_Y_CELLS,1:eps22].=0
-    # U[:,NUM_Y_CELLS,1:eps_e22].=0
-    # U[:,NUM_Y_CELLS,1:eps12].=0
-    # U[:,NUM_Y_CELLS,1:eps_e12].=0
-
 end
 
 
-function solve_source_term(U, Mu, lambda, RHO, sigma_y, kappa, k, beta, YOUNG_MOD_E, NUM_X_CELLS, NUM_Y_CELLS, DELTA_T, nsteps; solver=Euler())
+function solve_source_term(U, Mu, lambda, RHO, sigma_y, kappa, k, beta, YOUNG_MOD_E, NUM_X_CELLS, NUM_Y_CELLS, DELTA_T, nsteps, oneD; solver=Euler())
     for i in 1:NUM_X_CELLS+2
         for j in 1:NUM_Y_CELLS+2
             u0 = vec(U[i,j,:])
             tspan = (0.0, 1*DELTA_T)
-            p = (Mu, lambda, RHO, sigma_y, kappa, k, YOUNG_MOD_E, beta)
+            p = (Mu, lambda, RHO, sigma_y, kappa, k, YOUNG_MOD_E, beta, oneD)
             prob = ODEProblem(f!, u0, tspan, p)
             sol = solve(prob, solver, dt=DELTA_T/nsteps, adaptive=true)
             # print(sol.u)
@@ -160,6 +113,7 @@ function f!(du, u, prm, t)
     k = prm[6]
     YOUNG_MOD_E = prm[7]
     beta = prm[8]
+    oneD = prm[9]
 
     eps_e11_val = u[eps_e11]
     eps_e12_val = u[eps_e12]
@@ -178,21 +132,39 @@ function f!(du, u, prm, t)
     p2_val      = u[p2]
 
     tr_eps = eps_e11_val + eps_e22_val + eps_e33_val
-    sigma11 = 2 * Mu * eps_e11_val + lambda * tr_eps
+    
+    if oneD          # -- SWITCHED TO 1D --
+        sigma11 = 2 * Mu * eps_e11_val + lambda * eps_e11_val
+    else
+        sigma11 = 2 * Mu * eps_e11_val + lambda * tr_eps
+    end
     sigma12 = 2 * Mu * eps_e12_val
     sigma22 = 2 * Mu * eps_e22_val + lambda * tr_eps
     sigma33 = 2 * Mu * eps_e33_val + lambda * tr_eps
     tr_sigma = sigma11 + sigma22 + sigma33
     one_third_tr_sigma = (1/3) * tr_sigma
-    sigma11_prime = sigma11 - one_third_tr_sigma
+    if oneD          # -- SWITCHED TO 1D --
+        sigma11_prime = sigma11
+    else
+        sigma11_prime = sigma11 - one_third_tr_sigma
+    end
     sigma12_prime = sigma12
     sigma22_prime = sigma22 - one_third_tr_sigma
     sigma33_prime = sigma33 - one_third_tr_sigma
-    sigmaP_dot_sigmaP = sigma11_prime^2 + 2*sigma12_prime^2 + sigma22_prime^2 + sigma33_prime^2
+    
+    if Variables.__oneD          # -- SWITCHED TO 1D --
+        sigmaP_dot_sigmaP = sigma11_prime^2
+    else
+        sigmaP_dot_sigmaP = sigma11_prime^2 + 2*sigma12_prime^2 + sigma22_prime^2 + sigma33_prime^2
+    end
     norm_sigmaP = sqrt(1.5 * sigmaP_dot_sigmaP)
 
-    R_val = max(YOUNG_MOD_E / 20 * (p_val - 5000 * p_val^2),-0.95 * sigma_y)
-    # R_val = YOUNG_MOD_E / 20 * p_val 
+    if Variables.__SOFTENING
+        R_val = max(YOUNG_MOD_E / 20 * (p_val - 5000 * p_val^2),-0.95 * sigma_y)
+    else
+        R_val = YOUNG_MOD_E / 20 * p_val
+    end
+
     phi = norm_sigmaP - sigma_y - R_val + kappa * (p_til_val - p_val)
     
     if phi > 0
@@ -228,6 +200,7 @@ end
 
 
 function compute_stress_strain_curve(U, half_NXC, half_NYC, Mu, lambda, sigma11, sigma12, sigma22, sigma33, stress, strain, t)
+    # not yet configured for 1D problem
     offset=Variables.__OFFSET
     t_tr_sigma = sigma11[half_NXC-offset, half_NYC-offset] + sigma22[half_NXC-offset, half_NYC-offset] + sigma33[half_NXC-offset, half_NYC-offset]
     t_one_third_tr_sigma = (1/3) * t_tr_sigma
@@ -308,7 +281,10 @@ function main()
     DELTA_Y = Variables.__DELTA_Y
     DELTA_T = Variables.__DELTA_T
     NUM_TIMESTEPS = Variables.__NUM_TIMESTEPS
+    oneD = Variables.__oneD
     modulus = Variables.__modulus
+    INIT_CONDITIONS = Variables.__INIT_CONDITIONS
+    BOUND_CONDITIONS = Variables.__BOUND_CONDITIONS
 
     ### INITIALIZE conservative scheme
     U = zeros(Float32, NUM_X_CELLS+2, NUM_Y_CELLS+2, NUM_EQUATIONS)
@@ -346,121 +322,9 @@ function main()
 
 
 
-
-
     k=Variables.__k
     solver=ImplicitEuler()
     nsteps=1
-
-     ## MAKE THESE PATHS GLOBAL IN VARIABLES.JL
-    
-    #----------- INITIAL CONDITIONS for U ----------#
-    ### INITIAL CONDITION: X impact
-    # for j in 1:NUM_Y_CELLS+2
-    #     for i in 1:half_NXC+1
-    #         U[i,j,u1] = 1. *RHO
-    #         # U[i,j,p1] = 1. *RHO
-    #     end
-    #     for i in half_NXC+2:NUM_X_CELLS+2
-    #         U[i,j,u1] = -1. *RHO
-    #         # U[i,j,p1] = -1. *RHO
-    #     end
-    # end
-
-    ### INITIAL CONDITION: Y impact
-    # for i in 1:NUM_X_CELLS+2
-    #     for j in 1:half_NYC+1
-    #         U[i,j,u2] = 1. *RHO
-    #         # U[i,j,eps_e11] = 0.01
-    #     end
-    #     for j in half_NYC+2:NUM_Y_CELLS+2
-    #         U[i,j,u2] = -1. *RHO
-    #         # U[i,j,eps_e11] = 0
-    #     end
-    # end
-
-
-    ### INITIAL CONDITION: X pull test
-    # for j in 1:NUM_Y_CELLS+2
-    #     for i in 1:half_NXC+1
-    #         U[i,j,u1] = -1. *RHO
-    #     end
-    #     for i in half_NXC+2:NUM_X_CELLS+2
-    #         U[i,j,u1] = 1. *RHO
-    #     end
-    # end
-
-
-    ### INITIAL CONDITION: Y pull test
-    # for i in 1:NUM_X_CELLS+2
-    #     for j in 1:half_NYC+1
-    #         U[i,j,u2] = -1. *RHO
-    #     end
-    #     for j in half_NYC+2:NUM_Y_CELLS+2
-    #         U[i,j,u2] = 1. *RHO
-    #     end
-    # end
-
-
-    ### INITIAL CONDITION: X shear test
-    # for j in 1:NUM_Y_CELLS+2
-    #     for i in 1:half_NXC+1
-    #         U[i,j,u2] = -1. *RHO
-    #     end
-    #     for i in half_NXC+2:NUM_X_CELLS+2
-    #         U[i,j,u2] = 1. *RHO
-    #     end
-    # end
-
-
-    ### INITIAL CONDITION: Y shear test
-    # for i in 1:NUM_X_CELLS+2
-    #     for j in 1:half_NYC+1
-    #         U[i,j,u1] = 1. *RHO
-    #     end
-    #     for j in half_NYC+2:NUM_Y_CELLS+2
-    #         U[i,j,u1] = -1. *RHO
-    #     end
-    # end
-
-
-    ### INITIAL CONDITION: Left moving, right fixed wall, linear gradient velocity
-    #=
-        Use long bar, pay attention to the number of pieces broken into. 
-        Try for all mesh size cases n=1,2,3,4,5 and compare least squares with n=8 (i.e. 100*2^8 cells).
-        Try all of these for both 1D and 2D cases and also for both stress strain curves.
-        Check notes for more specifications on the 2D case.
-    =#
-    for i in 1:NUM_X_CELLS+2
-        for j in 1:NUM_Y_CELLS+2
-            U[i,j,u1] = 1. * RHO * (i-1) / (NUM_X_CELLS+1)
-            U[i,j,u2] = 0
-        end
-    end
-
-
-    ### INITIAL CONDITION: Bomb
-    # for i in 1:NUM_X_CELLS+2
-    #     for j in 1:NUM_Y_CELLS+2
-    #         if abs(i-half_NXC-1) <= 10 && abs(j-half_NYC-1) <= 10
-    #             U[i,j,eps11] = 0.01
-    #             U[i,j,eps_e11] = 0.01
-    #             U[i,j,eps22] = 0.01
-    #             U[i,j,eps_e22] = 0.01
-    #             # U[i,j,w] = 0
-    #         end
-    #     end
-    # end
-
-    ### INITIAL CONDITION: LEFT/RIGHT STRAIN (like in J.A. Shaw's paper)
-    # for i in 1:NUM_X_CELLS+2
-    #     for j in 1:NUM_Y_CELLS+2
-    #         if 105-5*i > j && 75-5*i < j
-    #             U[i,j,eps11] = -0.001
-    #             U[i,j,eps_e11] = -0.001
-    #         end
-    #     end
-    # end
 
     #----- set the extra variables we are plotting -----#
     v1[:,:] .= U[:,:,u1]/RHO
@@ -514,12 +378,14 @@ function main()
     open(OUTPATH_TXT * "p1.txt", "a") do p1_file
     open(OUTPATH_TXT * "p2.txt", "a") do p2_file
 
-    x = 0:DELTA_X:DOMAIN_X
-    y = 0:DELTA_Y:DOMAIN_Y
+    xs = 0:DELTA_X:DOMAIN_X
+    ys = 0:DELTA_Y:DOMAIN_Y
 
     @time begin
+    initial_conditions(U, xs, RHO, INIT_CONDITIONS)
     for t in 0:NUM_TIMESTEPS-1
         compute_stress_strain_curve(U, half_NXC, half_NYC, Mu, lambda, sigma11, sigma12, sigma22, sigma33, stress, strain, t)
+        boundary_conditions(U, BOUND_CONDITIONS)
         if t % modulus == 0
             ### write data to files         ### gif command : ffmpeg -framerate 10 -i frame%04d.png output.gif
             # joined = join(U[1:NUM_X_CELLS+2, half_NYC, eps11], " ") # USE A FOR LOOP AND THIS?
@@ -565,7 +431,7 @@ function main()
 
 
             t_str = @sprintf("%04d", t)
-            vtk_grid("$OUTPATH_VTK$VTK_NAME$t_str", x, y) do vtk # FIX THIS NOW!!!!!!!!!!
+            vtk_grid("$OUTPATH_VTK$VTK_NAME$t_str", xs, ys) do vtk # FIX THIS NOW!!!!!!!!!!
                 vtk["eps11"] = U[2:NUM_X_CELLS+1,2:NUM_Y_CELLS+1,eps11]
                 vtk["eps12"] = U[2:NUM_X_CELLS+1,2:NUM_Y_CELLS+1,eps12]
                 vtk["eps22"] = U[2:NUM_X_CELLS+1,2:NUM_Y_CELLS+1,eps22]
@@ -587,11 +453,10 @@ function main()
                 vtk["p2"] = U[2:NUM_X_CELLS+1,2:NUM_Y_CELLS+1,p2]
             end
         end
-
-        compute_flux_riemann(U, Fx, Fy, Fx_shift, Fy_shift, v1, v2, sigma11, sigma12, sigma22, sigma33, eta, tr_eps, Mu, lambda, RHO, lc, beta, NUM_X_CELLS, NUM_Y_CELLS, p0)
+        compute_flux_riemann(U, Fx, Fy, Fx_shift, Fy_shift, v1, v2, sigma11, sigma12, sigma22, sigma33, eta, tr_eps, Mu, lambda, RHO, lc, beta, NUM_X_CELLS, NUM_Y_CELLS, p0, oneD)
         evolve_U_godunov(U, Fx_shift, Fy_shift, eta, cL, cR, RHO, NUM_X_CELLS, NUM_Y_CELLS, DELTA_T, DELTA_X, DELTA_Y)
         @time begin
-        solve_source_term(U, Mu, lambda, RHO, sigma_y, kappa, k, beta, YOUNG_MOD_E, NUM_X_CELLS, NUM_Y_CELLS, DELTA_T, nsteps; solver=solver)
+        solve_source_term(U, Mu, lambda, RHO, sigma_y, kappa, k, beta, YOUNG_MOD_E, NUM_X_CELLS, NUM_Y_CELLS, DELTA_T, nsteps, oneD; solver=solver)
         print(t)
         end
         # Blowup test

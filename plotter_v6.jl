@@ -18,9 +18,10 @@ function main()
     GIF_NAME = Variables.__GIF_NAME
     DOMAIN_X = Variables.__X_DOMAIN
     DOMAIN_Y = Variables.__Y_DOMAIN
+    DELTA_T = Variables.__DELTA_T
 
-    x = [0:DELTA_X:DOMAIN_X]
-    y = [0:DELTA_Y:DOMAIN_Y]
+    xs = [0:DELTA_X:DOMAIN_X]
+    ys = [0:DELTA_Y:DOMAIN_Y]
 
     # Open the file and read line by line
     eps11_lines = readlines(OUTPATH_TXT*"eps11.txt")
@@ -61,7 +62,8 @@ function main()
     p1_arrays = [parse.(Float64, split(line)) for line in p1_lines]
     p2_arrays = [parse.(Float64, split(line)) for line in p2_lines]
 
-    anim = @animate for i in 1:floor(Int,NUM_TIMESTEPS/modulus)
+    n_lines = countlines(OUTPATH_TXT*"eps11.txt")
+    anim = @animate for i in 1:floor(Int, n_lines)
         yeps11 = eps11_arrays[i]
         yeps12 = eps12_arrays[i]
         yeps22 = eps22_arrays[i]
@@ -79,16 +81,16 @@ function main()
         yp1 = p1_arrays[i]
         yp2 = p2_arrays[i]
 
-        p = plot(x, yeps_e11, seriestype=:line, label=L"\epsilon^e_{11}", color=:black, markersize=0.1, layout=9)
-        plot!(p[2], x, yeps_e12, seriestype=:line, label=L"\epsilon^e_{12}", color=:black, markersize=0.1)
-        plot!(p[3], x, yeps_e22, seriestype=:line, label=L"\epsilon^e_{22}", color=:black, markersize=0.1)
-        plot!(p[4], x, ysigma11, seriestype=:line, label=L"\sigma_{11}", color=:black, markersize=0.1)
-        plot!(p[5], x, yv1, seriestype=:line, label=L"v_1", color=:black, markersize=0.1)
-        plot!(p[6], x, yv2, seriestype=:line, label=L"v_2", color=:black, markersize=0.1)
-        plot!(p[7], x, yp, seriestype=:line, label=L"p", color=:black, markersize=0.1)
-        plot!(p[8], x, yp_til, seriestype=:line, label=L"\tilde{p}", color=:black, markersize=0.1)
-        plot!(p[9], x, yp1, seriestype=:line, label="p1", color=:black, markersize=0.1)
-
+        p = plot(xs, yeps_e11, seriestype=:line, label=L"\epsilon^e_{11}", color=:black, markersize=0.1, layout=9)
+        plot!(p[2], xs, yeps_e12, seriestype=:line, label=L"\epsilon^e_{12}", color=:black, markersize=0.1)
+        plot!(p[3], xs, yeps_e22, seriestype=:line, label=L"\epsilon^e_{22}", color=:black, markersize=0.1)
+        plot!(p[4], xs, ysigma11, seriestype=:line, label=L"\sigma_{11}", color=:black, markersize=0.1)
+        plot!(p[5], xs, yv1, seriestype=:line, label=L"v_1", color=:black, markersize=0.1)
+        plot!(p[6], xs, yv2, seriestype=:line, label=L"v_2", color=:black, markersize=0.1)
+        plot!(p[7], xs, yp, seriestype=:line, label=L"p", color=:black, markersize=0.1)
+        plot!(p[8], xs, yp_til, seriestype=:line, label=L"\tilde{p}", color=:black, markersize=0.1)
+        plot!(p[9], xs, yp1, seriestype=:line, label=L"p_1", color=:black, markersize=0.1)
+        plot!(p, title = @sprintf("Time = %.8f", i*DELTA_T), subplot=1)
         if i == floor(Int,NUM_TIMESTEPS/modulus)
             savefig(p, OUTPATH_PNG)
         end
